@@ -46,6 +46,15 @@ app.get('/', async (req, res) => {
     }
 });
 
+// Add a simple test endpoint that doesn't require authentication
+app.get('/api/test', (req, res) => {
+    res.status(200).json({
+        message: "Backend is working!",
+        timestamp: new Date().toISOString(),
+        status: "OK"
+    });
+});
+
 const PORT = process.env.PORT || 3001;
 
 // Initialize database connection and start server

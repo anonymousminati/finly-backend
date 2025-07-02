@@ -7,17 +7,27 @@ import { pool } from '../configs/db.config.js';
  */
 const authMiddleware = async (req, res, next) => {
     try {
+        console.log('🔒 Auth Middleware - Starting authentication check');
+        console.log('🔍 Request URL:', req.originalUrl);
+        console.log('🔍 Request Method:', req.method);
+        console.log('🔍 All Headers:', req.headers);
+        
         // Extract token from Authorization header (Bearer token) or body
         let sessionToken = null;
         
         const authHeader = req.headers.authorization;
+        console.log('🔍 Authorization Header:', authHeader);
+        
         if (authHeader && authHeader.startsWith('Bearer ')) {
             sessionToken = authHeader.substring(7); // Remove 'Bearer ' prefix
+            console.log('✅ Found Bearer token:', sessionToken.substring(0, 30) + '...');
         } else if (req.body.sessionToken) {
             sessionToken = req.body.sessionToken;
+            console.log('✅ Found token in body:', sessionToken.substring(0, 30) + '...');
         }
 
         if (!sessionToken) {
+            console.log('❌ No session token found');
             return res.status(401).json({
                 message: 'Access denied. No session token provided.',
                 error: 'Authentication required'

@@ -1,7 +1,3 @@
-
-
-import mysql from 'mysql2/promise';
-
 const Financial = {
     /**
      * Get comprehensive financial summary for a user
@@ -14,8 +10,8 @@ const Financial = {
         const { from, to } = dateRange;
         
         try {
-            // Get user's financial accounts with transaction counts
-            const accountsQuery = `
+            // 1. Get accounts with their transaction counts - Build query dynamically
+            let accountsQuery = `
                 SELECT 
                     fa.id as account_id,
                     fa.account_name,
@@ -33,65 +29,36 @@ const Financial = {
                 FROM financial_accounts fa
                 LEFT JOIN transactions t ON fa.id = t.account_id 
                     AND t.status = 'completed'
-                    ${from ? 'AND t.transaction_date >= ?' : ''}
-                    ${to ? 'AND t.transaction_date <= ?' : ''}
-                WHERE fa.user_id = ? AND fa.is_active = 1
-                GROUP BY fa.id
-                ORDER BY fa.is_primary DESC, fa.current_balance DESC
             `;
             
             const accountsParams = [];
-            if (from) accountsParams.push(from);
-            if (to) accountsParams.push(to);
+            
+            // Add date range filters if provided
+            if (from) {
+                accountsQuery += ' AND t.transaction_date >= ?';
+                accountsParams.push(from);
+            }
+            
+            if (to) {
+                accountsQuery += ' AND t.transaction_date <= ?';
+                accountsParams.push(to);
+            }
+            
+            accountsQuery += `
+                WHERE fa.user_id = ? AND fa.is_active = 1
+                GROUP BY fa.id
+                ORDER BY fa.is_primary DESC, fa.account_type ASC
+            `;
             accountsParams.push(userId);
+            
+            console.log('🔍 Accounts Query:', accountsQuery);
+            console.log('🔍 Accounts Parameters:', accountsParams);
             
             const [accounts] = await pool.execute(accountsQuery, accountsParams);
             
-            // Get transaction summary
-            const transactionSummaryQuery = `
-                SELECT 
-                    COUNT(*) as total_transactions,
-                    SUM(CASE WHEN transaction_type = 'income' THEN amount ELSE 0 END) as total_income,
-                    SUM(CASE WHEN transaction_type = 'expense' THEN amount ELSE 0 END) as total_expenses,
-                    AVG(amount) as average_transaction
-                FROM transactions t
-                WHERE t.user_id = ? AND t.status = 'completed'
-                    ${from ? 'AND t.transaction_date >= ?' : ''}
-                    ${to ? 'AND t.transaction_date <= ?' : ''}
-            `;
-            
-            const transactionParams = [userId];
-            if (from) transactionParams.push(from);
-            if (to) transactionParams.push(to);
-            
-            const [transactionSummary] = await pool.execute(transactionSummaryQuery, transactionParams);
-            
-            // Get recent transactions (last 5)
-            const recentTransactionsQuery = `
-                SELECT 
-                    t.id as transaction_id,
-                    t.transaction_type as type,
-                    t.description,
-                    t.amount,
-                    t.transaction_date as date,
-                    t.status,
-                    tc.id as category_id,
-                    tc.name as category_name,
-                    tc.icon as category_icon
-                FROM transactions t
-                LEFT JOIN transaction_categories tc ON t.category_id = tc.id
-                WHERE t.user_id = ? AND t.status = 'completed'
-                    ${from ? 'AND t.transaction_date >= ?' : ''}
-                    ${to ? 'AND t.transaction_date <= ?' : ''}
-                ORDER BY t.transaction_date DESC, t.created_at DESC
-                LIMIT 5
-            `;
-            
-            const [recentTransactions] = await pool.execute(recentTransactionsQuery, transactionParams);
-            
-            // Get category summaries for each account (top 3 categories)
+            // 2. Get category summaries for each account using parallel execution
             const categorySummaryPromises = accounts.map(async (account) => {
-                const categorySummaryQuery = `
+                let categorySummaryQuery = `
                     SELECT 
                         tc.id as category_id,
                         tc.name as category_name,
@@ -100,16 +67,26 @@ const Financial = {
                     FROM transactions t
                     JOIN transaction_categories tc ON t.category_id = tc.id
                     WHERE t.account_id = ? AND t.status = 'completed'
-                        ${from ? 'AND t.transaction_date >= ?' : ''}
-                        ${to ? 'AND t.transaction_date <= ?' : ''}
+                `;
+                
+                const categoryParams = [account.account_id];
+                
+                // Add date range filters if provided
+                if (from) {
+                    categorySummaryQuery += ' AND t.transaction_date >= ?';
+                    categoryParams.push(from);
+                }
+                
+                if (to) {
+                    categorySummaryQuery += ' AND t.transaction_date <= ?';
+                    categoryParams.push(to);
+                }
+                
+                categorySummaryQuery += `
                     GROUP BY tc.id, tc.name
                     ORDER BY total_amount DESC
                     LIMIT 3
                 `;
-                
-                const categoryParams = [account.account_id];
-                if (from) categoryParams.push(from);
-                if (to) categoryParams.push(to);
                 
                 const [categories] = await pool.execute(categorySummaryQuery, categoryParams);
                 return {
@@ -120,75 +97,53 @@ const Financial = {
             
             const categorySummaries = await Promise.all(categorySummaryPromises);
             
-            // Calculate summary totals
+            // 3. Calculate summary totals with correct credit utilization
             const totalBalance = accounts
                 .filter(acc => acc.account_type !== 'credit')
                 .reduce((sum, acc) => sum + parseFloat(acc.current_balance || 0), 0);
             
             const creditCards = accounts.filter(acc => acc.account_type === 'credit');
-            const totalCreditLimit = creditCards.reduce((sum, card) => sum + parseFloat(card.credit_limit || 0), 0);
-            const totalCreditUtilized = creditCards.reduce((sum, card) => {
-                const utilized = parseFloat(card.credit_limit || 0) - parseFloat(card.available_balance || 0);
-                return sum + Math.max(0, utilized);
-            }, 0);
+            const creditData = creditCards.reduce((data, card) => ({
+                total_limit: data.total_limit + parseFloat(card.credit_limit || 0),
+                total_utilized: data.total_utilized + Math.abs(parseFloat(card.current_balance || 0))
+            }), { total_limit: 0, total_utilized: 0 });
             
-            // Format accounts with category summaries
-            const formattedAccounts = accounts.map(account => {
-                const categorySummary = categorySummaries.find(cs => cs.account_id === account.account_id);
-                return {
-                    account_id: account.account_id,
-                    account_name: account.account_name,
-                    account_number: account.account_number,
-                    masked_account_number: account.masked_account_number,
-                    bank_name: account.bank_name,
-                    branch_name: account.branch_name,
-                    card_type: account.card_type,
-                    current_balance: parseFloat(account.current_balance || 0),
-                    available_balance: parseFloat(account.available_balance || 0),
-                    credit_limit: account.credit_limit ? parseFloat(account.credit_limit) : null,
-                    currency: account.currency,
-                    transactions_count: parseInt(account.transactions_count || 0),
-                    categories_summary: categorySummary ? categorySummary.categories.map(cat => ({
-                        category_id: cat.category_id,
-                        category_name: cat.category_name,
-                        total_amount: parseFloat(cat.total_amount || 0),
-                        transaction_count: parseInt(cat.transaction_count || 0)
-                    })) : []
-                };
-            });
-            
-            // Format response
+            // 4. Format the exact response structure
             return {
                 summary: {
                     total_balance: totalBalance,
                     total_active_accounts: accounts.length,
                     credit_card: {
-                        total_limit: totalCreditLimit,
-                        total_utilized: totalCreditUtilized,
-                        utilization_percentage: totalCreditLimit > 0 ? 
-                            Math.round((totalCreditUtilized / totalCreditLimit) * 100 * 100) / 100 : 0
+                        total_limit: creditData.total_limit,
+                        total_utilized: creditData.total_utilized,
+                        utilization_percentage: creditData.total_limit > 0 ? 
+                            Math.round((creditData.total_utilized / creditData.total_limit) * 100 * 100) / 100 : 0
                     }
                 },
-                accounts: formattedAccounts,
-                transactions_summary: {
-                    total_transactions: parseInt(transactionSummary[0]?.total_transactions || 0),
-                    total_income: parseFloat(transactionSummary[0]?.total_income || 0),
-                    total_expenses: parseFloat(transactionSummary[0]?.total_expenses || 0),
-                    average_transaction: parseFloat(transactionSummary[0]?.average_transaction || 0),
-                    recent_transactions: recentTransactions.map(txn => ({
-                        transaction_id: txn.transaction_id,
-                        type: txn.type,
-                        category: txn.category_id ? {
-                            id: txn.category_id,
-                            name: txn.category_name,
-                            icon: txn.category_icon
-                        } : null,
-                        description: txn.description,
-                        amount: parseFloat(txn.amount),
-                        date: txn.date,
-                        status: txn.status
-                    }))
-                }
+                accounts: accounts.map(account => {
+                    const categorySummary = categorySummaries.find(cs => cs.account_id === account.account_id);
+                    
+                    return {
+                        account_id: account.account_id,
+                        account_name: account.account_name,
+                        account_number: account.account_number,
+                        masked_account_number: account.masked_account_number,
+                        bank_name: account.bank_name,
+                        branch_name: account.branch_name,
+                        card_type: account.card_type,
+                        current_balance: parseFloat(account.current_balance || 0),
+                        available_balance: parseFloat(account.available_balance || 0),
+                        credit_limit: account.credit_limit ? parseFloat(account.credit_limit) : null,
+                        currency: account.currency,
+                        transactions_count: parseInt(account.transactions_count || 0),
+                        categories_summary: categorySummary ? categorySummary.categories.map(cat => ({
+                            category_id: cat.category_id,
+                            category_name: cat.category_name,
+                            total_amount: parseFloat(cat.total_amount || 0),
+                            transaction_count: parseInt(cat.transaction_count || 0)
+                        })) : []
+                    };
+                })
             };
             
         } catch (error) {
@@ -252,7 +207,72 @@ const Financial = {
             console.error('Error resolving user:', error);
             throw error;
         }
-    }
+    },
+
+    /**
+     * Get recent transactions for a user
+     * @param {Object} pool - Database connection pool
+     * @param {number} userId - User ID
+     * @param {number} limit - Number of transactions to retrieve
+     * @param {Object} dateRange - Optional date range filter
+     * @returns {Array} List of recent transactions
+     */
+    getRecentTransactions: async (pool, userId, limit = 5, dateRange = {}) => {
+        try {
+            console.log('🔄 getRecentTransactions called with:', { userId, limit, dateRange });
+            
+            // Check if transactions table exists
+            try {
+                const [tables] = await pool.query("SHOW TABLES LIKE 'transactions'");
+                console.log('🔍 Transactions table exists:', tables.length > 0);
+                
+                if (tables.length === 0) {
+                    console.log('⚠️ Transactions table does not exist, returning empty array');
+                    return [];
+                }
+            } catch (tableError) {
+                console.error('Error checking tables:', tableError);
+                return [];
+            }
+            
+            // Simple test query first to check if user has any transactions
+            const testQuery = 'SELECT COUNT(*) as count FROM transactions WHERE user_id = ?';
+            const [testResult] = await pool.query(testQuery, [parseInt(userId)]);
+            console.log('🔍 User has transactions:', testResult[0].count);
+            
+            // If no transactions, return empty array
+            if (testResult[0].count === 0) {
+                console.log('⚠️ No transactions found for user');
+                return [];
+            }
+            
+            // Simplest possible query first
+            const simpleQuery = 'SELECT * FROM transactions WHERE user_id = ? LIMIT ?';
+            const [transactions] = await pool.query(simpleQuery, [parseInt(userId), parseInt(limit)]);
+            
+            console.log('✅ Found transactions:', transactions.length);
+            
+            // Return basic transaction format
+            return transactions.map(txn => ({
+                transaction_id: txn.id,
+                type: txn.transaction_type || 'unknown',
+                category: null,
+                description: txn.description || 'No description',
+                amount: parseFloat(txn.amount || 0),
+                date: txn.transaction_date || txn.created_at,
+                status: txn.status || 'completed',
+                account: {
+                    name: 'Unknown Account',
+                    bank: 'Unknown Bank'
+                }
+            }));
+            
+            
+        } catch (error) {
+            console.error('Error getting recent transactions:', error);
+            throw error;
+        }
+    },
 };
 
 export default Financial;
