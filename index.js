@@ -3,6 +3,7 @@ import { corsMiddleware } from './configs/cors.config.js';
 import { pool } from './configs/db.config.js';
 import dotenv from 'dotenv';
 import UserRoute from './routes/users.route.js';
+import FinancialRoute from './routes/financial.route.js';
 dotenv.config();
 
 const app = express();
@@ -14,6 +15,7 @@ app.use(corsMiddleware);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api/users', UserRoute);
+app.use('/api/financial', FinancialRoute);
 
 // Test database connection on startup
 async function initializeDatabase() {
