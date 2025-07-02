@@ -4,6 +4,7 @@ import { pool } from './configs/db.config.js';
 import dotenv from 'dotenv';
 import UserRoute from './routes/users.route.js';
 import FinancialRoute from './routes/financial.route.js';
+import AccountRoute from './routes/account.route.js';
 dotenv.config();
 
 const app = express();
@@ -16,6 +17,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/api/users', UserRoute);
 app.use('/api/financial', FinancialRoute);
+app.use('/api/accounts', AccountRoute);
 
 // Test database connection on startup
 async function initializeDatabase() {
