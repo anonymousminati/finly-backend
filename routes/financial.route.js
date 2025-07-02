@@ -19,6 +19,13 @@ FinancialRoute.get(
     FinanceController.getRecentTransactions
 );
 
+FinancialRoute.get(
+    '/expense-statistics',
+    authMiddleware,
+    FinanceController.validateSummaryRequest,
+    FinanceController.getExpenseStatistics
+);
+
 // TEST ENDPOINT (Remove in production)
 FinancialRoute.get(
     '/test-transactions/:userId',

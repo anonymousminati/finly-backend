@@ -122,6 +122,52 @@ const FinanceController = {
     },
 
     /**
+     * Get expense statistics for a user
+     * GET /api/financial/expense-statistics
+     */
+    getExpenseStatistics: async (req, res) => {
+        try {
+            const requesterId = req.user.id; // From JWT middleware
+            const { userId, userUuid, days = 7 } = req.query;
+            
+            // Resolve the target user (defaults to authenticated user if no userId/userUuid provided)
+            const targetUserId = await FinanceController.resolveTargetUser(requesterId, userId, userUuid);
+            
+            // Validate days parameter
+            const parsedDays = parseInt(days);
+            if (isNaN(parsedDays) || parsedDays <= 0 || parsedDays > 365) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid days parameter. Must be between 1 and 365.'
+                });
+            }
+            
+            // Get expense statistics
+            console.log('🔄 Controller: Calling getExpenseStatistics with:', {
+                targetUserId,
+                parsedDays
+            });
+            const stats = await Financial.getExpenseStatistics(pool, targetUserId, parsedDays);
+            
+            // Format response
+            const response = {
+                success: true,
+                data: stats,
+                metadata: {
+                    user_id: targetUserId,
+                    period_days: parsedDays,
+                    generated_at: new Date().toISOString()
+                }
+            };
+            
+            res.status(200).json(response);
+            
+        } catch (error) {
+            FinanceController.handleControllerError(error, res, 'fetching expense statistics');
+        }
+    },
+
+    /**
      * Middleware for request validation
      */
     validateSummaryRequest: (req, res, next) => {

@@ -273,6 +273,181 @@ const Financial = {
             throw error;
         }
     },
+
+    /**
+     * Get expense statistics for the user
+     * @param {Object} pool - Database connection pool
+     * @param {number} userId - User ID
+     * @param {number} days - Number of days for the statistics
+     * @returns {Object} Expense statistics
+     */
+    getExpenseStatistics: async (pool, userId, days = 7) => {
+        try {
+            console.log('🔄 getExpenseStatistics called with:', { userId, days });
+            
+            // Check if transactions table exists
+            try {
+                const [tables] = await pool.query("SHOW TABLES LIKE 'transactions'");
+                if (tables.length === 0) {
+                    console.log('⚠️ Transactions table does not exist, returning empty stats');
+                    return {
+                        total_expenses: 0,
+                        daily_expenses: [],
+                        weekly_change: 0,
+                        highest_category: {
+                            category_name: 'No Categories',
+                            category_id: 0,
+                            total_amount: 0,
+                            transaction_count: 0
+                        },
+                        lowest_category: {
+                            category_name: 'No Categories',
+                            category_id: 0,
+                            total_amount: 0,
+                            transaction_count: 0
+                        },
+                        period_start: new Date().toISOString().split('T')[0],
+                        period_end: new Date().toISOString().split('T')[0]
+                    };
+                }
+            } catch (tableError) {
+                console.error('Error checking tables:', tableError);
+                throw tableError;
+            }
+            
+            // Calculate date ranges
+            const endDate = new Date();
+            const startDate = new Date();
+            startDate.setDate(endDate.getDate() - days + 1);
+            
+            const prevStartDate = new Date();
+            prevStartDate.setDate(startDate.getDate() - days);
+            const prevEndDate = new Date(startDate);
+            prevEndDate.setDate(prevEndDate.getDate() - 1);
+            
+            const formatDate = (date) => date.toISOString().split('T')[0];
+            
+            // Get transactions for current period
+            const currentQuery = `
+                SELECT * FROM transactions 
+                WHERE user_id = ? 
+                AND DATE(transaction_date) BETWEEN ? AND ?
+                AND (transaction_type = 'expense' OR transaction_type = 'debit' OR amount < 0)
+                ORDER BY transaction_date DESC
+                LIMIT 100
+            `;
+            
+            // Get transactions for previous period (for comparison)
+            const previousQuery = `
+                SELECT * FROM transactions 
+                WHERE user_id = ? 
+                AND DATE(transaction_date) BETWEEN ? AND ?
+                AND (transaction_type = 'expense' OR transaction_type = 'debit' OR amount < 0)
+                ORDER BY transaction_date DESC
+                LIMIT 100
+            `;
+            
+            const [currentTransactions] = await pool.query(currentQuery, [
+                parseInt(userId), 
+                formatDate(startDate), 
+                formatDate(endDate)
+            ]);
+            
+            const [previousTransactions] = await pool.query(previousQuery, [
+                parseInt(userId), 
+                formatDate(prevStartDate), 
+                formatDate(prevEndDate)
+            ]);
+            
+            console.log('✅ Found current transactions:', currentTransactions.length);
+            console.log('✅ Found previous transactions:', previousTransactions.length);
+            
+            // Calculate daily expenses
+            const dailyExpenses = [];
+            const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            
+            for (let i = 0; i < days; i++) {
+                const date = new Date(startDate);
+                date.setDate(startDate.getDate() + i);
+                const dateStr = formatDate(date);
+                
+                const dayTransactions = currentTransactions.filter(t => 
+                    t.transaction_date && t.transaction_date.toISOString().split('T')[0] === dateStr
+                );
+                
+                const dayTotal = dayTransactions.reduce((sum, t) => 
+                    sum + Math.abs(parseFloat(t.amount || 0)), 0
+                );
+                
+                dailyExpenses.push({
+                    day: dayNames[date.getDay()],
+                    amount: dayTotal,
+                    date: dateStr
+                });
+            }
+            
+            // Calculate totals
+            const totalExpenses = currentTransactions.reduce((sum, t) => 
+                sum + Math.abs(parseFloat(t.amount || 0)), 0
+            );
+            
+            const previousTotalExpenses = previousTransactions.reduce((sum, t) => 
+                sum + Math.abs(parseFloat(t.amount || 0)), 0
+            );
+            
+            // Calculate weekly change
+            const weeklyChange = previousTotalExpenses > 0 
+                ? ((totalExpenses - previousTotalExpenses) / previousTotalExpenses) * 100
+                : 0;
+            
+            // Process categories (using basic categorization since we don't have category table)
+            const categoryMap = new Map();
+            
+            currentTransactions.forEach(t => {
+                const categoryName = t.category_name || 'Uncategorized';
+                const categoryId = t.category_id || 0;
+                
+                if (categoryMap.has(categoryName)) {
+                    const existing = categoryMap.get(categoryName);
+                    existing.total_amount += Math.abs(parseFloat(t.amount || 0));
+                    existing.transaction_count += 1;
+                } else {
+                    categoryMap.set(categoryName, {
+                        category_name: categoryName,
+                        category_id: categoryId,
+                        total_amount: Math.abs(parseFloat(t.amount || 0)),
+                        transaction_count: 1
+                    });
+                }
+            });
+            
+            const sortedCategories = Array.from(categoryMap.values())
+                .sort((a, b) => b.total_amount - a.total_amount);
+            
+            const defaultCategory = {
+                category_name: 'No Categories',
+                category_id: 0,
+                total_amount: 0,
+                transaction_count: 0
+            };
+            
+            return {
+                total_expenses: totalExpenses,
+                daily_expenses: dailyExpenses,
+                weekly_change: Math.round(weeklyChange * 100) / 100,
+                highest_category: sortedCategories[0] || defaultCategory,
+                lowest_category: sortedCategories[sortedCategories.length - 1] || defaultCategory,
+                period_start: formatDate(startDate),
+                period_end: formatDate(endDate)
+            };
+            
+        } catch (error) {
+            console.error('Error getting expense statistics:', error);
+            throw error;
+        }
+    },
+
+    // ...existing methods...
 };
 
 export default Financial;
