@@ -60,6 +60,77 @@ const FinanceController = {
      * Get recent transactions for a user
      * GET /api/financial/recent-transactions
      */
+
+    getRecentTransactionsbyAccountId: async (req, res) => {
+        try {
+            const requesterId = req.user.id; // From JWT middleware
+            const { accountId } = req.params; // Get from URL path parameter
+            const { from, to, limit = 20 } = req.query; // Get from query parameters with higher default
+            
+            // Validate accountId
+            const parsedAccountId = parseInt(accountId);
+            if (isNaN(parsedAccountId) || parsedAccountId <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid accountId. Must be a positive integer.'
+                });
+            }
+            // Validate limit - increased max to support "All Time" view
+            const parsedLimit = parseInt(limit);
+            if (isNaN(parsedLimit) || parsedLimit <= 0 || parsedLimit > 200) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid limit. Must be between 1 and 200.'
+                });
+            }
+            // Validate and parse date range
+            const { isValid, errors, dateRange } = FinanceController.validateDateRange(from, to);
+            if (!isValid) {
+                return res.status(400).json({
+                    success: false,
+                    message: errors.join(' '),
+                    errors
+                });
+            }
+            // Get recent transactions by account ID
+            console.log('🔄 Controller: Calling getRecentTransactionsbyAccountId with:', 
+                    {
+                        userId: requesterId,
+                        accountId: parsedAccountId,
+                        parsedLimit,
+                        dateRange
+                    });
+            const transactions = await Financial.getRecentTransactionsByAccountId(pool, requesterId, parsedAccountId, parsedLimit, dateRange);
+            // Format response
+            const response = {
+                success: true,
+                data: {
+                    transactions,
+                    count: transactions.length,
+                    pagination: {
+                        limit: parsedLimit,
+                        offset: 0,
+                        has_more: transactions.length === parsedLimit // Indicates if there might be more
+                    }
+                },
+                metadata: {
+                    user_id: requesterId,
+                    account_id: parsedAccountId,
+                    filters: {
+                        from: dateRange.from || null,
+                        to: dateRange.to || null,
+                        type: null
+                    },
+                    generated_at: new Date().toISOString()
+                }
+            };
+            res.status(200).json(response);
+        } catch (error) {
+            FinanceController.handleControllerError(error, res, 'fetching recent transactions by account ID');
+        }
+    },
+
+
     getRecentTransactions: async (req, res) => {
         try {
             const requesterId = req.user.id; // From JWT middleware

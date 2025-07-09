@@ -217,6 +217,67 @@ const Financial = {
      * @param {Object} dateRange - Optional date range filter
      * @returns {Array} List of recent transactions
      */
+    getRecentTransactionsByAccountId: async (pool, userId, accountId, limit = 5, dateRange = {}) => {
+        try {
+            console.log('🔄 getRecentTransactionsByAccountId called with:', { userId, accountId, limit, dateRange });
+            // Check if transactions table exists
+            try {
+                const [tables] = await pool.query("SHOW TABLES LIKE 'transactions'");
+                console.log('🔍 Transactions table exists:', tables.length > 0)
+                if (tables.length === 0) {
+                        
+                    console.log('⚠️ Transactions table does not exist, returning empty array');
+                    return [];
+                }
+            } catch (tableError) {
+                console.error('Error checking tables:', tableError);
+                return [];
+            }
+            // Simple test query first to check if user has any transactions
+            const testQuery = 'SELECT COUNT(*) as count FROM transactions WHERE user_id = ? AND account_id = ?';
+            const [testResult] = await pool.query(testQuery, [parseInt(userId), parseInt(accountId)]);
+            console.log('🔍 User has transactions:', testResult[0].count);
+
+            if (testResult[0].count === 0) {
+                console.log('⚠️ No transactions found for user');
+                return [];
+            }
+
+            // Simplest possible query first
+            const simpleQuery = 'SELECT * FROM transactions WHERE user_id = ? AND account_id = ? LIMIT ?';
+            const [transactions] = await pool.query(simpleQuery, [parseInt(userId), parseInt(accountId), parseInt(limit)]);
+
+            console.log('✅ Found transactions:', transactions.length);
+
+            // Return basic transaction format
+            return transactions.map(txn => ({
+                transaction_id: txn.id,
+                type: txn.transaction_type || 'unknown',
+                category: null,
+                description: txn.description || 'No description',
+                amount: parseFloat(txn.amount || 0),
+                date: txn.transaction_date || txn.created_at,
+                status: txn.status || 'completed',
+                account: {
+                    name: 'Unknown Account',
+                    bank: 'Unknown Bank'
+                }
+            }));
+
+        } catch (error) {
+            console.error('Error getting recent transactions:', error);
+            throw error;
+        }
+    },
+
+    /**
+     * Get recent transactions for a user
+     * @param {Object} pool - Database connection pool
+     * @param {number} userId - User ID
+     * @param {number} limit - Number of transactions to retrieve
+     * @param {Object} dateRange - Optional date range filter
+     * @returns {Array} List of recent transactions
+     */
     getRecentTransactions: async (pool, userId, limit = 5, dateRange = {}) => {
         try {
             console.log('🔄 getRecentTransactions called with:', { userId, limit, dateRange });
