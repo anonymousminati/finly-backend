@@ -622,6 +622,94 @@ const FinanceController = {
             });
         }
     },
+
+    /**
+     * Get expense chart data
+     * GET /api/financial/expense-chart-data
+     */
+    getExpenseChartData: async (req, res) => {
+        try {
+            const { startDate, endDate } = req.query;
+            const userId = req.user?.id; // Use auth middleware's user ID
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    error: 'Unauthorized'
+                });
+            }
+
+            // Validate dates
+            if (!startDate || !endDate) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Start date and end date are required'
+                });
+            }
+
+            const query = `
+                WITH monthly_data AS (
+                    SELECT 
+                        DATE_FORMAT(t.transaction_date, '%Y-%m') as month_group,
+                        DATE_FORMAT(t.transaction_date, '%b %Y') as month_label,
+                        COALESCE(SUM(CASE 
+                            WHEN t.transaction_date >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+                            THEN ABS(t.amount) ELSE 0 
+                        END), 0) as this_month,
+                        COALESCE(SUM(CASE 
+                            WHEN t.transaction_date BETWEEN DATE_SUB(CURDATE(), INTERVAL 2 MONTH)
+                                AND DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+                            THEN ABS(t.amount) ELSE 0 
+                        END), 0) as last_month
+                    FROM transactions t
+                    WHERE t.user_id = ?
+                        AND t.transaction_type = 'expense'
+                        AND t.transaction_date BETWEEN ? AND ?
+                        AND t.status = 'completed'
+                    GROUP BY month_group, month_label
+                    ORDER BY month_group ASC
+                )
+                SELECT 
+                    month_label as month,
+                    this_month as thisWeek,
+                    last_month as lastWeek,
+                    (this_month - last_month) as difference
+                FROM monthly_data
+                ORDER BY month_group ASC
+                LIMIT 12
+            `;
+
+            const [results] = await pool.query(query, [userId, startDate, endDate]);
+
+            // Format the response to match ChartData interface
+            const response = {
+                success: true,
+                data: results.map(row => ({
+                    month: row.month,
+                    thisWeek: Number(row.thisWeek.toFixed(2)),
+                    lastWeek: Number(row.lastWeek.toFixed(2)),
+                    difference: Number(row.difference.toFixed(2))
+                })),
+                metadata: {
+                    user_id: userId,
+                    period: {
+                        startDate,
+                        endDate
+                    },
+                    generated_at: new Date().toISOString()
+                }
+            };
+
+            res.status(200).json(response);
+        } catch (error) {
+            console.error('Error fetching expense chart data:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to fetch expense chart data',
+                message: error.message
+            });
+        }
+    }
 };
 
 export default FinanceController;

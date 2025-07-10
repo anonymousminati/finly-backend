@@ -20,7 +20,9 @@ app.use('/api/users', UserRoute);
 app.use('/api/financial', FinancialRoute);
 app.use('/api/accounts', AccountRoute);
 app.use('/api/bills', (await import('./routes/bills.route.js')).default);
+app.use('/api/expenses', (await import('./routes/expenses.route.js')).default);
 app.use('/api/test', TestRoute);
+app.use('/api', (await import('./routes/export.route.js')).default);
 
 // Debug endpoint to check for bills in the database
 app.get('/api/debug/bills', async (req, res) => {
