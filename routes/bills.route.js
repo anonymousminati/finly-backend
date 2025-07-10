@@ -21,4 +21,7 @@ BillsRoute.get('/', auth, BillsController.getBills);
 // Get a specific bill by ID
 BillsRoute.get('/:id', auth, BillsController.getBillById);
 
+// Create a new bill
+BillsRoute.post('/', auth, BillsController.createBill);
+
 export default BillsRoute;

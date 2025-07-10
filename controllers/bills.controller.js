@@ -111,6 +111,64 @@ const BillsController = {
                 message: error.message 
             });
         }
+    },
+
+    /**
+     * Create a new bill for the authenticated user
+     * POST /api/bills
+     */
+    createBill: async (req, res) => {
+        try {
+            const userId = req.user?.id || 10; // fallback to 10 (Sophia Budget) for mock/demo
+            
+            // Get bill data from request body
+            const billData = {
+                company_name: req.body.company,
+                service_name: req.body.serviceName || req.body.company,
+                plan_name: req.body.plan,
+                description: req.body.description,
+                amount: parseFloat(req.body.amount),
+                currency: req.body.currency || 'USD',
+                billing_frequency: req.body.frequency,
+                next_due_date: req.body.nextDueDate,
+                status: req.body.status || 'upcoming',
+                auto_pay_enabled: req.body.autoPayEnabled || false,
+                company_logo_url: req.body.logo,
+                account_id: req.body.accountId,
+                category_id: req.body.categoryId,
+                website_url: req.body.websiteUrl,
+                customer_account_number: req.body.customerAccountNumber,
+                notes: req.body.notes
+            };
+            
+            // Validate required fields
+            const requiredFields = ['company_name', 'amount', 'billing_frequency', 'next_due_date'];
+            const missingFields = requiredFields.filter(field => !billData[field]);
+            
+            if (missingFields.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    error: 'Missing required fields',
+                    missingFields
+                });
+            }
+            
+            // Create bill in database
+            const newBill = await Bills.createBill(pool, userId, billData);
+            
+            res.status(201).json({
+                success: true,
+                message: 'Bill created successfully',
+                data: newBill
+            });
+        } catch (error) {
+            console.error('Error creating bill:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to create bill',
+                message: error.message
+            });
+        }
     }
 };
 

@@ -213,6 +213,71 @@ const Bills = {
             console.error('Error fetching bill by ID:', error);
             throw new Error('Failed to fetch bill details: ' + error.message);
         }
+    },
+
+    /**
+     * Create a new bill for a user
+     * @param {Object} pool - Database connection pool
+     * @param {number} userId - User ID
+     * @param {Object} billData - Bill data to create
+     * @returns {Object} Created bill details
+     */
+    createBill: async (pool, userId, billData) => {
+        try {
+            const {
+                company_name,
+                service_name,
+                plan_name = null,
+                description = null,
+                amount,
+                currency = 'USD',
+                billing_frequency,
+                next_due_date,
+                last_paid_date = null,
+                last_paid_amount = null,
+                status = 'upcoming',
+                auto_pay_enabled = false,
+                reminder_days_before = 3,
+                company_logo_url = null,
+                account_id = null,
+                category_id = null,
+                website_url = null,
+                customer_account_number = null,
+                notes = null
+            } = billData;
+
+            // Required fields validation
+            if (!company_name || !service_name || !amount || !billing_frequency || !next_due_date) {
+                throw new Error('Missing required fields for creating a bill');
+            }
+
+            // Insert new bill
+            const [result] = await pool.query(`
+                INSERT INTO bills (
+                    user_id, account_id, company_name, service_name, plan_name, 
+                    description, amount, currency, billing_frequency, next_due_date,
+                    last_paid_date, last_paid_amount, status, auto_pay_enabled,
+                    reminder_days_before, company_logo_url, category_id, website_url,
+                    customer_account_number, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                userId, account_id, company_name, service_name, plan_name,
+                description, amount, currency, billing_frequency, next_due_date,
+                last_paid_date, last_paid_amount, status, auto_pay_enabled,
+                reminder_days_before, company_logo_url, category_id, website_url,
+                customer_account_number, notes
+            ]);
+
+            if (!result.insertId) {
+                throw new Error('Failed to create bill');
+            }
+
+            // Get the newly created bill
+            return await Bills.getBillById(pool, userId, result.insertId);
+        } catch (error) {
+            console.error('Error creating bill:', error);
+            throw new Error('Failed to create bill: ' + error.message);
+        }
     }
 };
 
