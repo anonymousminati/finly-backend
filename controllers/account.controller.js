@@ -297,6 +297,110 @@ const AccountController = {
     },
 
     /**
+     * Create a new account
+     * POST /api/accounts
+     */
+    createAccount: async (req, res) => {
+        try {
+            console.log('🔴 createAccount controller called - POST /api/accounts');
+            console.log('🔍 req.body:', req.body);
+            
+            const requesterId = req.user.id; // Always use authenticated user
+            const {
+                account_type,
+                account_name,
+                account_number,
+                masked_account_number,
+                bank_name,
+                branch_name,
+                routing_number,
+                card_type,
+                current_balance,
+                available_balance,
+                credit_limit,
+                currency,
+                is_primary,
+                is_active
+            } = req.body;
+            
+            // Validate required fields
+            if (!account_type || !account_name || !account_number || !bank_name) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Missing required fields: account_type, account_name, account_number, bank_name'
+                });
+            }
+            
+            // Validate account type
+            const validAccountTypes = ['checking', 'savings', 'credit', 'investment', 'business'];
+            if (!validAccountTypes.includes(account_type)) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid account type. Must be one of: ' + validAccountTypes.join(', ')
+                });
+            }
+            
+            // Validate card type for credit accounts
+            if (account_type === 'credit' && !card_type) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Card type is required for credit accounts'
+                });
+            }
+            
+            // Validate credit limit for credit accounts
+            if (account_type === 'credit' && !credit_limit) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Credit limit is required for credit accounts'
+                });
+            }
+            
+            // Prepare account data
+            const accountData = {
+                user_id: requesterId,
+                account_type,
+                account_name,
+                account_number,
+                masked_account_number: masked_account_number || account_number.replace(/(.{4}).*(.{4})/, '$1****$2'),
+                bank_name,
+                branch_name: branch_name || null,
+                routing_number: routing_number || null,
+                card_type: card_type || null,
+                current_balance: current_balance || 0,
+                available_balance: available_balance || current_balance || 0,
+                credit_limit: credit_limit || null,
+                currency: currency || 'USD',
+                is_primary: is_primary || false,
+                is_active: is_active !== undefined ? is_active : true
+            };
+            
+            console.log('🔄 Controller: Creating account with data:', accountData);
+            
+            // Create the account
+            const account = await Account.createAccount(pool, accountData);
+            
+            // Format response
+            const response = {
+                success: true,
+                data: {
+                    account
+                },
+                metadata: {
+                    user_id: requesterId,
+                    generated_at: new Date().toISOString()
+                }
+            };
+            
+            console.log('✅ Account created successfully:', account.account_id);
+            res.status(201).json(response);
+            
+        } catch (error) {
+            AccountController.handleControllerError(error, res, 'creating account');
+        }
+    },
+
+    /**
      * Helper function to handle controller errors
      */
     handleControllerError: (error, res, operation) => {

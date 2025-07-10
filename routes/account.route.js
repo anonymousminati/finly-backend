@@ -7,6 +7,18 @@ const AccountRoute = express.Router();
 // Account routes (All protected with authentication)
 
 /**
+ * Create a new account
+ * POST /api/accounts
+ * Body: account data (account_type, account_name, etc.)
+ * Uses authenticated user only
+ */
+AccountRoute.post(
+    '/new-account',
+    authMiddleware,
+    AccountController.createAccount
+);
+
+/**
  * Get all accounts for the authenticated user
  * GET /api/accounts
  * No query params needed - uses authenticated user only

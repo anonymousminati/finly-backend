@@ -277,6 +277,97 @@ const Account = {
             console.error('Error getting user accounts:', error);
             throw error;
         }
+    },
+
+    /**
+     * Create a new financial account for a user
+     * @param {Object} pool - Database connection pool
+     * @param {Object} accountData - Account data to create
+     * @returns {Object} Created account information
+     */
+    createAccount: async (pool, accountData) => {
+        try {
+            console.log('🔄 Account.createAccount called with:', accountData);
+            
+            const {
+                user_id,
+                account_type,
+                account_name,
+                account_number,
+                masked_account_number,
+                bank_name,
+                branch_name,
+                routing_number,
+                card_type,
+                current_balance,
+                available_balance,
+                credit_limit,
+                currency,
+                is_primary,
+                is_active
+            } = accountData;
+
+            // If this is set as primary, first remove primary flag from other accounts
+            if (is_primary) {
+                await pool.query(
+                    'UPDATE financial_accounts SET is_primary = FALSE WHERE user_id = ?',
+                    [user_id]
+                );
+            }
+
+            const query = `
+                INSERT INTO financial_accounts (
+                    user_id, account_type, account_name, account_number, 
+                    masked_account_number, bank_name, branch_name, routing_number, 
+                    card_type, current_balance, available_balance, credit_limit, 
+                    currency, is_primary, is_active
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `;
+
+            const [result] = await pool.query(query, [
+                user_id,
+                account_type,
+                account_name,
+                account_number,
+                masked_account_number,
+                bank_name,
+                branch_name,
+                routing_number,
+                card_type,
+                current_balance,
+                available_balance,
+                credit_limit,
+                currency,
+                is_primary,
+                is_active
+            ]);
+
+            console.log('✅ Account created successfully with ID:', result.insertId);
+            
+            // Return the created account
+            return {
+                account_id: result.insertId,
+                user_id,
+                account_type,
+                account_name,
+                account_number,
+                masked_account_number,
+                bank_name,
+                branch_name,
+                routing_number,
+                card_type,
+                current_balance: parseFloat(current_balance || 0),
+                available_balance: parseFloat(available_balance || 0),
+                credit_limit: credit_limit ? parseFloat(credit_limit) : null,
+                currency,
+                is_primary,
+                is_active
+            };
+            
+        } catch (error) {
+            console.error('Error creating account:', error);
+            throw error;
+        }
     }
 };
 
