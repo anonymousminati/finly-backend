@@ -349,6 +349,219 @@ const FinanceController = {
         });
     },
 
+    /**
+     * Validate pagination parameters
+     */
+    validatePaginationParams: (limit, offset) => {
+        const parsedLimit = parseInt(limit);
+        const parsedOffset = parseInt(offset);
+        
+        if (isNaN(parsedLimit) || parsedLimit <= 0 || parsedLimit > 100) {
+            return { valid: false, error: 'Invalid limit. Must be between 1 and 100.' };
+        }
+        
+        if (isNaN(parsedOffset) || parsedOffset < 0) {
+            return { valid: false, error: 'Invalid offset. Must be a non-negative integer.' };
+        }
+        
+        return { valid: true, limit: parsedLimit, offset: parsedOffset };
+    },
+
+    /**
+     * Parse array filters from query parameters
+     */
+    parseArrayFilter: (value, validValues) => {
+        if (!value) return null;
+        const items = Array.isArray(value) ? value : value.split(',');
+        const validItems = items.filter(item => validValues.includes(item.trim()));
+        return validItems.length > 0 ? validItems : null;
+    },
+
+    /**
+     * Parse numeric array filters from query parameters
+     */
+    parseNumericArrayFilter: (value) => {
+        if (!value) return null;
+        const items = Array.isArray(value) ? value : value.split(',');
+        const validItems = items
+            .map(id => parseInt(id.trim()))
+            .filter(id => !isNaN(id) && id > 0);
+        return validItems.length > 0 ? validItems : null;
+    },
+
+    /**
+     * Parse amount filters from query parameters
+     */
+    parseAmountFilters: (amountMin, amountMax) => {
+        const filters = {};
+        
+        if (amountMin !== undefined && amountMin !== '') {
+            const parsed = parseFloat(amountMin);
+            if (!isNaN(parsed) && parsed >= 0) {
+                filters.amountMin = parsed;
+            }
+        }
+        
+        if (amountMax !== undefined && amountMax !== '') {
+            const parsed = parseFloat(amountMax);
+            if (!isNaN(parsed) && parsed >= 0) {
+                filters.amountMax = parsed;
+            }
+        }
+        
+        return filters;
+    },
+
+    /**
+     * Build filters object from query parameters
+     */
+    buildTransactionFilters: (queryParams) => {
+        const {
+            dateFrom, dateTo, accountId, transactionType, categoryId,
+            paymentMethod, status, amountMin, amountMax, search
+        } = queryParams;
+        
+        const filters = {};
+        
+        // Date filters
+        if (dateFrom) filters.dateFrom = dateFrom;
+        if (dateTo) filters.dateTo = dateTo;
+        
+        // Account filter
+        if (accountId) {
+            const parsedAccountId = parseInt(accountId);
+            if (!isNaN(parsedAccountId) && parsedAccountId > 0) {
+                filters.accountId = parsedAccountId;
+            }
+        }
+        
+        // Array filters
+        const transactionTypes = FinanceController.parseArrayFilter(
+            transactionType, ['income', 'expense', 'transfer']
+        );
+        if (transactionTypes) filters.transactionType = transactionTypes;
+        
+        const categories = FinanceController.parseNumericArrayFilter(categoryId);
+        if (categories) filters.categoryId = categories;
+        
+        const paymentMethods = FinanceController.parseArrayFilter(
+            paymentMethod, ['credit_card', 'debit_card', 'bank_transfer', 'cash', 'upi', 'paypal']
+        );
+        if (paymentMethods) filters.paymentMethod = paymentMethods;
+        
+        const statuses = FinanceController.parseArrayFilter(
+            status, ['completed', 'pending', 'failed', 'cancelled']
+        );
+        if (statuses) filters.status = statuses;
+        
+        // Amount filters
+        const amountFilters = FinanceController.parseAmountFilters(amountMin, amountMax);
+        Object.assign(filters, amountFilters);
+        
+        // Search filter
+        if (search && search.trim()) {
+            filters.search = search.trim();
+        }
+        
+        return filters;
+    },
+
+    /**
+     * Get transactions with pagination and dynamic filters
+     * GET /api/financial/transactions
+     */
+    getTransactions: async (req, res) => {
+        try {
+            const requesterId = req.user.id;
+            const { 
+                userId, userUuid, limit = 20, offset = 0, 
+                sortBy = 'transaction_date', sortOrder = 'DESC',
+                dateFrom, dateTo
+            } = req.query;
+            
+            console.log('🔄 getTransactions called with query:', req.query);
+            
+            // Resolve target user
+            const targetUserId = await FinanceController.resolveTargetUser(requesterId, userId, userUuid);
+            
+            // Validate pagination
+            const paginationResult = FinanceController.validatePaginationParams(limit, offset);
+            if (!paginationResult.valid) {
+                return res.status(400).json({
+                    success: false,
+                    message: paginationResult.error
+                });
+            }
+            
+            // Validate date range
+            const { isValid, errors } = FinanceController.validateDateRange(dateFrom, dateTo);
+            if (!isValid) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Invalid date range.',
+                    errors
+                });
+            }
+            
+            // Build filters
+            const filters = FinanceController.buildTransactionFilters(req.query);
+            
+            // Validate sort parameters
+            const allowedSortFields = [
+                'transaction_date', 'amount', 'created_at', 'updated_at',
+                'merchant_name', 'transaction_type', 'status'
+            ];
+            const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'transaction_date';
+            const validSortOrder = ['ASC', 'DESC'].includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+            
+            // Prepare options for the model
+            const options = {
+                limit: paginationResult.limit,
+                offset: paginationResult.offset,
+                filters,
+                sortBy: validSortBy,
+                sortOrder: validSortOrder
+            };
+            
+            console.log('🔄 Calling Financial.getTransactionsWithPagination with options:', options);
+            
+            // Get transactions from model
+            const result = await Financial.getTransactionsWithPagination(pool, targetUserId, options);
+            
+            // Format response
+            const response = {
+                success: true,
+                data: result,
+                metadata: {
+                    user_id: targetUserId,
+                    filters: filters,
+                    sort: {
+                        by: validSortBy,
+                        order: validSortOrder
+                    },
+                    generated_at: new Date().toISOString()
+                }
+            };
+            
+            // Set cache headers
+            res.set({
+                'Cache-Control': 'private, max-age=30',
+                'ETag': `"${Buffer.from(JSON.stringify(result)).toString('base64').slice(0, 32)}"`
+            });
+            
+            res.status(200).json(response);
+            
+        } catch (error) {
+            FinanceController.handleControllerError(error, res, 'fetching transactions');
+        }
+    },
+
+    // Helper function to check if a string is a valid date
+    isValidDate: (dateString) => {
+        const regex = /^\d{4}-\d{2}-\d{2}$/;
+        return regex.test(dateString);
+    },
+
     // TEST METHOD (Remove in production)
     testRecentTransactions: async (req, res) => {
         try {

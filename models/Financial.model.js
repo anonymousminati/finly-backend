@@ -508,6 +508,257 @@ const Financial = {
         }
     },
 
+    /**
+     * Get transactions with pagination and dynamic filters
+     * @param {Object} pool - Database connection pool
+     * @param {number} userId - User ID
+     * @param {Object} options - Query options
+     * @param {number} options.limit - Maximum number of transactions to return
+     * @param {number} options.offset - Number of transactions to skip
+     * @param {Object} options.filters - Dynamic filters object
+     * @param {string} options.sortBy - Sort field (default: 'transaction_date')
+     * @param {string} options.sortOrder - Sort order (default: 'DESC')
+     * @returns {Object} Transactions with pagination metadata
+     */
+    getTransactionsWithPagination: async (pool, userId, options = {}) => {
+        try {
+            console.log('🔄 getTransactionsWithPagination called with:', { userId, options });
+            
+            // Set default options
+            const {
+                limit = 20,
+                offset = 0,
+                filters = {},
+                sortBy = 'transaction_date',
+                sortOrder = 'DESC'
+            } = options;
+            
+            // Validate limit and offset
+            const parsedLimit = Math.min(Math.max(parseInt(limit), 1), 100); // Between 1 and 100
+            const parsedOffset = Math.max(parseInt(offset), 0);
+            
+            // Check if transactions table exists
+            const [tables] = await pool.query("SHOW TABLES LIKE 'transactions'");
+            if (tables.length === 0) {
+                console.log('⚠️ Transactions table does not exist, returning empty result');
+                return {
+                    transactions: [],
+                    pagination: {
+                        total: 0,
+                        limit: parsedLimit,
+                        offset: parsedOffset,
+                        has_more: false,
+                        current_page: Math.floor(parsedOffset / parsedLimit) + 1,
+                        total_pages: 0
+                    }
+                };
+            }
+            
+            // Build base query with joins
+            let baseQuery = `
+                SELECT 
+                    t.id,
+                    t.transaction_type,
+                    t.category_id,
+                    t.merchant_name,
+                    t.description,
+                    t.items,
+                    t.amount,
+                    t.currency,
+                    t.payment_method,
+                    t.transaction_date,
+                    t.transaction_time,
+                    t.status,
+                    t.reference_number,
+                    t.external_transaction_id,
+                    t.location_data,
+                    t.metadata,
+                    t.created_at,
+                    t.updated_at,
+                    fa.account_name,
+                    fa.account_type,
+                    fa.bank_name,
+                    fa.masked_account_number,
+                    tc.name as category_name,
+                    tc.color as category_color,
+                    tc.icon as category_icon
+                FROM transactions t
+                LEFT JOIN financial_accounts fa ON t.account_id = fa.id
+                LEFT JOIN transaction_categories tc ON t.category_id = tc.id
+                WHERE t.user_id = ?
+            `;
+            
+            let countQuery = `
+                SELECT COUNT(*) as total
+                FROM transactions t
+                LEFT JOIN financial_accounts fa ON t.account_id = fa.id
+                LEFT JOIN transaction_categories tc ON t.category_id = tc.id
+                WHERE t.user_id = ?
+            `;
+            
+            const queryParams = [userId];
+            const countParams = [userId];
+            
+            // Apply dynamic filters
+            if (filters.dateFrom) {
+                baseQuery += ' AND t.transaction_date >= ?';
+                countQuery += ' AND t.transaction_date >= ?';
+                queryParams.push(filters.dateFrom);
+                countParams.push(filters.dateFrom);
+            }
+            
+            if (filters.dateTo) {
+                baseQuery += ' AND t.transaction_date <= ?';
+                countQuery += ' AND t.transaction_date <= ?';
+                queryParams.push(filters.dateTo);
+                countParams.push(filters.dateTo);
+            }
+            
+            if (filters.accountId) {
+                baseQuery += ' AND t.account_id = ?';
+                countQuery += ' AND t.account_id = ?';
+                queryParams.push(filters.accountId);
+                countParams.push(filters.accountId);
+            }
+            
+            if (filters.transactionType && filters.transactionType.length > 0) {
+                const placeholders = filters.transactionType.map(() => '?').join(', ');
+                baseQuery += ` AND t.transaction_type IN (${placeholders})`;
+                countQuery += ` AND t.transaction_type IN (${placeholders})`;
+                queryParams.push(...filters.transactionType);
+                countParams.push(...filters.transactionType);
+            }
+            
+            if (filters.categoryId && filters.categoryId.length > 0) {
+                const placeholders = filters.categoryId.map(() => '?').join(', ');
+                baseQuery += ` AND t.category_id IN (${placeholders})`;
+                countQuery += ` AND t.category_id IN (${placeholders})`;
+                queryParams.push(...filters.categoryId);
+                countParams.push(...filters.categoryId);
+            }
+            
+            if (filters.paymentMethod && filters.paymentMethod.length > 0) {
+                const placeholders = filters.paymentMethod.map(() => '?').join(', ');
+                baseQuery += ` AND t.payment_method IN (${placeholders})`;
+                countQuery += ` AND t.payment_method IN (${placeholders})`;
+                queryParams.push(...filters.paymentMethod);
+                countParams.push(...filters.paymentMethod);
+            }
+            
+            if (filters.status && filters.status.length > 0) {
+                const placeholders = filters.status.map(() => '?').join(', ');
+                baseQuery += ` AND t.status IN (${placeholders})`;
+                countQuery += ` AND t.status IN (${placeholders})`;
+                queryParams.push(...filters.status);
+                countParams.push(...filters.status);
+            }
+            
+            if (filters.amountMin !== undefined && filters.amountMin !== null) {
+                baseQuery += ' AND ABS(t.amount) >= ?';
+                countQuery += ' AND ABS(t.amount) >= ?';
+                queryParams.push(filters.amountMin);
+                countParams.push(filters.amountMin);
+            }
+            
+            if (filters.amountMax !== undefined && filters.amountMax !== null) {
+                baseQuery += ' AND ABS(t.amount) <= ?';
+                countQuery += ' AND ABS(t.amount) <= ?';
+                queryParams.push(filters.amountMax);
+                countParams.push(filters.amountMax);
+            }
+            
+            if (filters.search) {
+                baseQuery += ' AND (t.description LIKE ? OR t.merchant_name LIKE ? OR t.items LIKE ?)';
+                countQuery += ' AND (t.description LIKE ? OR t.merchant_name LIKE ? OR t.items LIKE ?)';
+                const searchTerm = `%${filters.search}%`;
+                queryParams.push(searchTerm, searchTerm, searchTerm);
+                countParams.push(searchTerm, searchTerm, searchTerm);
+            }
+            
+            // Validate sort fields
+            const allowedSortFields = [
+                'transaction_date', 'amount', 'created_at', 'updated_at',
+                'merchant_name', 'transaction_type', 'status'
+            ];
+            const validSortBy = allowedSortFields.includes(sortBy) ? sortBy : 'transaction_date';
+            const validSortOrder = ['ASC', 'DESC'].includes(sortOrder.toUpperCase()) ? sortOrder.toUpperCase() : 'DESC';
+            
+            // Add sorting and pagination
+            baseQuery += ` ORDER BY t.${validSortBy} ${validSortOrder}, t.id DESC`;
+            baseQuery += ` LIMIT ${parsedLimit} OFFSET ${parsedOffset}`;
+            
+            console.log('🔍 Base Query:', baseQuery);
+            console.log('🔍 Query Parameters:', queryParams);
+            
+            // Execute queries in parallel
+            const [transactionsResult, countResult] = await Promise.all([
+                pool.execute(baseQuery, queryParams),
+                pool.execute(countQuery, countParams)
+            ]);
+            
+            const [transactions] = transactionsResult;
+            const [countRows] = countResult;
+            const total = countRows[0]?.total || 0;
+            
+            console.log('✅ Found transactions:', transactions.length);
+            console.log('✅ Total transactions:', total);
+            
+            // Format transactions
+            const formattedTransactions = transactions.map(txn => ({
+                id: txn.id,
+                transaction_type: txn.transaction_type,
+                category: txn.category_id ? {
+                    id: txn.category_id,
+                    name: txn.category_name || 'Uncategorized',
+                    color: txn.category_color,
+                    icon: txn.category_icon
+                } : null,
+                merchant_name: txn.merchant_name,
+                description: txn.description,
+                items: txn.items,
+                amount: parseFloat(txn.amount || 0),
+                currency: txn.currency,
+                payment_method: txn.payment_method,
+                transaction_date: txn.transaction_date,
+                transaction_time: txn.transaction_time,
+                status: txn.status,
+                reference_number: txn.reference_number,
+                external_transaction_id: txn.external_transaction_id,
+                location_data: txn.location_data,
+                metadata: txn.metadata,
+                account: {
+                    name: txn.account_name || 'Unknown Account',
+                    type: txn.account_type,
+                    bank: txn.bank_name || 'Unknown Bank',
+                    masked_number: txn.masked_account_number
+                },
+                created_at: txn.created_at,
+                updated_at: txn.updated_at
+            }));
+            
+            // Calculate pagination metadata
+            const totalPages = Math.ceil(total / parsedLimit);
+            const currentPage = Math.floor(parsedOffset / parsedLimit) + 1;
+            const hasMore = (parsedOffset + parsedLimit) < total;
+            
+            return {
+                transactions: formattedTransactions,
+                pagination: {
+                    total,
+                    limit: parsedLimit,
+                    offset: parsedOffset,
+                    has_more: hasMore,
+                    current_page: currentPage,
+                    total_pages: totalPages
+                }
+            };
+            
+        } catch (error) {
+            console.error('Error getting transactions with pagination:', error);
+            throw error;
+        }
+    },
+
     // ...existing methods...
 };
 

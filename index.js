@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import UserRoute from './routes/users.route.js';
 import FinancialRoute from './routes/financial.route.js';
 import AccountRoute from './routes/account.route.js';
+import TestRoute from './routes/test.route.js';
 dotenv.config();
 
 const app = express();
@@ -18,6 +19,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api/users', UserRoute);
 app.use('/api/financial', FinancialRoute);
 app.use('/api/accounts', AccountRoute);
+app.use('/api/test', TestRoute);
 
 // Test database connection on startup
 async function initializeDatabase() {
