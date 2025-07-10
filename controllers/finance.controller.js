@@ -556,6 +556,35 @@ const FinanceController = {
         }
     },
 
+    /**
+     * Get transaction statistics for a user
+     * GET /api/financial/transactions/stats
+     */
+    getTransactionStats: async (req, res) => {
+        try {
+            const requesterId = req.user.id;
+            const { userId, userUuid } = req.query;
+            // Use buildTransactionFilters to support all query params
+            const filters = FinanceController.buildTransactionFilters(req.query);
+            // Resolve target user
+            const targetUserId = await FinanceController.resolveTargetUser(requesterId, userId, userUuid);
+            console.log('🔄 getTransactionStats called with filters:', filters);
+            const stats = await Financial.getTransactionStats(pool, targetUserId, filters);
+            res.status(200).json({
+                success: true,
+                data: stats
+            });
+        } catch (error) {
+            console.error('❌ Error getting transaction stats:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to get transaction statistics',
+                message: error.message,
+                stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+            });
+        }
+    },
+
     // Helper function to check if a string is a valid date
     isValidDate: (dateString) => {
         const regex = /^\d{4}-\d{2}-\d{2}$/;

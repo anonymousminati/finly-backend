@@ -759,6 +759,199 @@ const Financial = {
         }
     },
 
+    /**
+     * Get transaction statistics for a user
+     * @param {Object} pool - Database connection pool
+     * @param {number} userId - User ID
+     * @param {Object} filters - Optional filters
+     * @returns {Object} Transaction statistics
+     */
+    getTransactionStats: async (pool, userId, filters = {}) => {
+        try {
+            console.log('🔄 getTransactionStats called with:', { userId, filters });
+
+            // Check if transactions table exists
+            const [tables] = await pool.query("SHOW TABLES LIKE 'transactions'");
+            if (tables.length === 0) {
+                console.log('⚠️ Transactions table does not exist, returning empty stats');
+                return {
+                    total_transactions: 0,
+                    total_income: 0,
+                    total_expenses: 0,
+                    net_amount: 0,
+                    pending_count: 0,
+                    completed_count: 0,
+                    failed_count: 0,
+                    this_month_transactions: 0,
+                    this_month_income: 0,
+                    this_month_expenses: 0,
+                    avg_transaction_amount: 0,
+                    largest_transaction: 0,
+                    categories_count: 0
+                };
+            }
+
+            // Build base query with filters
+            let baseQuery = `
+                SELECT 
+                    COUNT(*) as total_transactions,
+                    SUM(CASE WHEN transaction_type = 'income' OR amount > 0 THEN ABS(amount) ELSE 0 END) as total_income,
+                    SUM(CASE WHEN transaction_type = 'expense' OR amount < 0 THEN ABS(amount) ELSE 0 END) as total_expenses,
+                    SUM(amount) as net_amount,
+                    SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_count,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+                    AVG(ABS(amount)) as avg_transaction_amount,
+                    MAX(ABS(amount)) as largest_transaction
+                FROM transactions t
+                LEFT JOIN financial_accounts fa ON t.account_id = fa.id
+                WHERE t.user_id = ?
+            `;
+            
+            let monthQuery = `
+                SELECT 
+                    COUNT(*) as this_month_transactions,
+                    SUM(CASE WHEN transaction_type = 'income' OR amount > 0 THEN ABS(amount) ELSE 0 END) as this_month_income,
+                    SUM(CASE WHEN transaction_type = 'expense' OR amount < 0 THEN ABS(amount) ELSE 0 END) as this_month_expenses
+                FROM transactions t
+                LEFT JOIN financial_accounts fa ON t.account_id = fa.id
+                WHERE t.user_id = ? 
+                AND YEAR(t.transaction_date) = YEAR(CURRENT_DATE)
+                AND MONTH(t.transaction_date) = MONTH(CURRENT_DATE)
+            `;
+
+            let categoryQuery = `
+                SELECT COUNT(DISTINCT t.category_id) as categories_count
+                FROM transactions t
+                WHERE t.user_id = ? AND t.category_id IS NOT NULL
+            `;
+
+            const queryParams = [userId];
+            const monthParams = [userId];
+            const categoryParams = [userId];
+
+            // Apply filters to all queries
+            if (filters.dateFrom) {
+                baseQuery += ' AND t.transaction_date >= ?';
+                queryParams.push(filters.dateFrom);
+            }
+
+            if (filters.dateTo) {
+                baseQuery += ' AND t.transaction_date <= ?';
+                queryParams.push(filters.dateTo);
+            }
+
+            if (filters.accountId) {
+                baseQuery += ' AND t.account_id = ?';
+                queryParams.push(filters.accountId);
+            }
+
+            if (filters.transactionType && filters.transactionType.length > 0) {
+                const placeholders = filters.transactionType.map(() => '?').join(', ');
+                baseQuery += ` AND t.transaction_type IN (${placeholders})`;
+                queryParams.push(...filters.transactionType);
+            }
+
+            if (filters.categoryId && filters.categoryId.length > 0) {
+                const placeholders = filters.categoryId.map(() => '?').join(', ');
+                baseQuery += ` AND t.category_id IN (${placeholders})`;
+                queryParams.push(...filters.categoryId);
+            }
+
+            if (filters.paymentMethod && filters.paymentMethod.length > 0) {
+                const placeholders = filters.paymentMethod.map(() => '?').join(', ');
+                baseQuery += ` AND t.payment_method IN (${placeholders})`;
+                queryParams.push(...filters.paymentMethod);
+            }
+
+            if (filters.status && filters.status.length > 0) {
+                const placeholders = filters.status.map(() => '?').join(', ');
+                baseQuery += ` AND t.status IN (${placeholders})`;
+                queryParams.push(...filters.status);
+            }
+
+            // Apply same filters to category query
+            if (filters.dateFrom) {
+                categoryQuery += ' AND t.transaction_date >= ?';
+                categoryParams.push(filters.dateFrom);
+            }
+
+            if (filters.dateTo) {
+                categoryQuery += ' AND t.transaction_date <= ?';
+                categoryParams.push(filters.dateTo);
+            }
+
+            if (filters.accountId) {
+                categoryQuery += ' AND t.account_id = ?';
+                categoryParams.push(filters.accountId);
+            }
+
+            if (filters.transactionType && filters.transactionType.length > 0) {
+                const placeholders = filters.transactionType.map(() => '?').join(', ');
+                categoryQuery += ` AND t.transaction_type IN (${placeholders})`;
+                categoryParams.push(...filters.transactionType);
+            }
+
+            if (filters.categoryId && filters.categoryId.length > 0) {
+                const placeholders = filters.categoryId.map(() => '?').join(', ');
+                categoryQuery += ` AND t.category_id IN (${placeholders})`;
+                categoryParams.push(...filters.categoryId);
+            }
+
+            if (filters.paymentMethod && filters.paymentMethod.length > 0) {
+                const placeholders = filters.paymentMethod.map(() => '?').join(', ');
+                categoryQuery += ` AND t.payment_method IN (${placeholders})`;
+                categoryParams.push(...filters.paymentMethod);
+            }
+
+            if (filters.status && filters.status.length > 0) {
+                const placeholders = filters.status.map(() => '?').join(', ');
+                categoryQuery += ` AND t.status IN (${placeholders})`;
+                categoryParams.push(...filters.status);
+            }
+
+            console.log('🔍 Stats Query:', baseQuery);
+            console.log('🔍 Stats Parameters:', queryParams);
+
+            // Execute queries in parallel
+            const [statsResult, monthResult, categoryResult] = await Promise.all([
+                pool.execute(baseQuery, queryParams),
+                pool.execute(monthQuery, monthParams),
+                pool.execute(categoryQuery, categoryParams)
+            ]);
+
+            const [statsRows] = statsResult;
+            const [monthRows] = monthResult;
+            const [categoryRows] = categoryResult;
+
+            const stats = statsRows[0] || {};
+            const monthStats = monthRows[0] || {};
+            const categoryStats = categoryRows[0] || {};
+
+            console.log('✅ Transaction statistics retrieved successfully');
+
+            return {
+                total_transactions: parseInt(stats.total_transactions || 0),
+                total_income: parseFloat(stats.total_income || 0),
+                total_expenses: parseFloat(stats.total_expenses || 0),
+                net_amount: parseFloat(stats.net_amount || 0),
+                pending_count: parseInt(stats.pending_count || 0),
+                completed_count: parseInt(stats.completed_count || 0),
+                failed_count: parseInt(stats.failed_count || 0),
+                this_month_transactions: parseInt(monthStats.this_month_transactions || 0),
+                this_month_income: parseFloat(monthStats.this_month_income || 0),
+                this_month_expenses: parseFloat(monthStats.this_month_expenses || 0),
+                avg_transaction_amount: parseFloat(stats.avg_transaction_amount || 0),
+                largest_transaction: parseFloat(stats.largest_transaction || 0),
+                categories_count: parseInt(categoryStats.categories_count || 0)
+            };
+
+        } catch (error) {
+            console.error('Error getting transaction statistics:', error);
+            throw error;
+        }
+    },
+
     // ...existing methods...
 };
 

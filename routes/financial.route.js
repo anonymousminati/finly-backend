@@ -20,6 +20,13 @@ FinancialRoute.get(
 );
 
 FinancialRoute.get(
+    '/transactions/stats',
+    authMiddleware,
+    FinanceController.validateSummaryRequest,
+    FinanceController.getTransactionStats
+);
+
+FinancialRoute.get(
     '/recent-transactions',
     authMiddleware,
     FinanceController.validateSummaryRequest,
